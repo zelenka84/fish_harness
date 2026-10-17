@@ -51,6 +51,12 @@ const DEFAULTS = {
   promptPreset: "fish-coder",
   customPrompt: "",
   appendPrompt: "",
+  proxy: "", // empty = HTTP(S)_PROXY from the environment / system
+  devMode: false,
+  completionEnabled: true,
+  completionModel: "", // empty = Claude Haiku 5.5 when an Anthropic key is set, else the default model
+  promptTemplate: { enabled: false, text: "" },
+  presetOverrides: {},
   providers: [
     { id: "anthropic", type: "anthropic", name: "Anthropic", apiKey: "", baseURL: "" },
   ],
@@ -68,6 +74,11 @@ export function loadConfig() {
     cache = { ...DEFAULTS, ...saved };
     if (!cache.providers?.some((p) => p.id === "anthropic")) {
       cache.providers = [DEFAULTS.providers[0], ...(cache.providers || [])];
+    }
+    // Older configs stored custom models by bare id; key them by provider.
+    if (!cache.model.includes("::") && !cache.model.startsWith("claude-")) {
+      const owner = cache.providers.find((p) => p.id !== "anthropic" && (p.models || []).includes(cache.model));
+      if (owner) cache.model = `${owner.id}::${cache.model}`;
     }
   }
   return cache;
@@ -112,5 +123,7 @@ export function applyPublicPatch(patch) {
 
 export function resolveBasePrompt(config) {
   if (config.promptPreset === "custom") return config.customPrompt || PROMPT_PRESETS[0].text;
-  return (PROMPT_PRESETS.find((p) => p.id === config.promptPreset) || PROMPT_PRESETS[0]).text;
+  const preset = PROMPT_PRESETS.find((p) => p.id === config.promptPreset) || PROMPT_PRESETS[0];
+  const override = config.devMode ? config.presetOverrides?.[preset.id] : null;
+  return override?.trim() ? override : preset.text;
 }

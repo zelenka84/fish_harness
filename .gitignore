@@ -3,3 +3,4 @@ ui/dist/
 dist/
 .env
 .claude/
+graphify-out/

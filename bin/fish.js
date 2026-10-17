@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import readline from "node:readline";
 import { Harness } from "../core/agent.js";
 import { loadConfig, saveConfig, PROMPT_PRESETS } from "../core/config.js";
-import { MODELS, EFFORTS } from "../core/models.js";
+import { MODELS, EFFORTS, listModels } from "../core/models.js";
 import { listSkills, seedSkills } from "../core/skills.js";
 import * as store from "../core/store.js";
 import { c, gradient, banner, MarkdownStream, summarizeInput, summarizeResult, spinner } from "./term.js";
@@ -137,6 +137,10 @@ async function repl() {
           md.flush();
           process.stdout.write(`\n  ${c.cyan("●")} ${c.bold(e.name)}${c.dim("(" + summarizeInput(e.name, e.input) + ")")}\n`);
           if (e.name !== "Shell") spin = spinner("Running");
+        } else if (e.type === "sub" && e.event.type === "tool_start") {
+          stopSpin();
+          process.stdout.write(`      ${c.dim("↳ " + e.event.name + "(" + summarizeInput(e.event.name, e.event.input) + ")")}\n`);
+          spin = spinner("Subagent working");
         } else if (e.type === "tool_output") {
           stopSpin();
           let out = "";
@@ -239,6 +243,8 @@ async function repl() {
             ["/cost", "this session's usage"],
             ["/sessions", "recent sessions"],
             ["/resume <id>", "continue a session"],
+            ["/compact", "summarize older turns to free context"],
+            ["/rewind [n]", "undo the last n prompts (files + conversation)"],
             ["/clear", "start a new session"],
             ["/exit", "quit"],
           ]
@@ -251,7 +257,14 @@ async function repl() {
           session.model = arg;
           store.saveSession(session);
         }
-        console.log(MODELS.map((m) => `  ${m.id === session.model ? c.cyan("●") : c.dim("○")} ${m.label.padEnd(20)} ${c.dim(m.id)} ${c.dim(`$${m.input}/$${m.output}`)}`).join("\n"));
+        {
+          let group = null;
+          for (const m of listModels(loadConfig())) {
+            if (m.providerName !== group) console.log(`\n  ${c.bold((group = m.providerName))}`);
+            console.log(`  ${m.id === session.model ? c.cyan("●") : c.dim("○")} ${m.label.padEnd(28)} ${c.dim(m.id)}`);
+          }
+          console.log(c.dim("\n  /model <id> to switch. Add providers in the app: Settings → Model providers."));
+        }
         break;
       case "effort":
         if (arg) saveConfig({ effort: arg });
@@ -281,6 +294,34 @@ async function repl() {
         const max = Math.max(1, ...st.days.map((d) => d.cost));
         const bars = "▁▂▃▄▅▆▇█";
         console.log("  " + gradient(st.days.map((d) => bars[Math.min(7, Math.floor((d.cost / max) * 7.99))]).join("")));
+        break;
+      }
+      case "compact": {
+        const spin = spinner("Compacting");
+        try {
+          await harness.compact(session);
+          spin.stop();
+          console.log(`  ${c.green("✔")} Earlier turns summarized ${c.dim(`(${session.compactions} compaction${session.compactions > 1 ? "s" : ""})`)}`);
+        } catch (err) {
+          spin.stop();
+          console.log(`  ${c.red("✖")} ${err.message}`);
+        }
+        break;
+      }
+      case "rewind": {
+        const { isPromptMessage } = await import("../core/agent.js");
+        const n = Math.max(1, Number(arg) || 1);
+        const prompts = session.messages.map((m, i) => (isPromptMessage(m) && i >= (session.summaryLength || 0) ? i : -1)).filter((i) => i >= 0);
+        const index = prompts[prompts.length - n];
+        if (index == null) {
+          console.log(c.dim("  Nothing to rewind."));
+          break;
+        }
+        const preview = harness.rewindPreview(session, index);
+        if (preview.shell) console.log(`  ${c.yellow("!")} Shell commands ran since then — their effects are not undone.`);
+        const r = harness.rewind(session, index, "both");
+        console.log(`  ${c.green("↺")} Rewound ${n} prompt${n > 1 ? "s" : ""}; restored ${r.reverted.length} file${r.reverted.length === 1 ? "" : "s"}.`);
+        for (const f of r.reverted) console.log(`    ${c.dim(f)}`);
         break;
       }
       case "cost": {

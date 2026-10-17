@@ -1,6 +1,9 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { EditorView } from "@codemirror/view";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { EditorView, keymap } from "@codemirror/view";
+import { Prec } from "@codemirror/state";
+import { HighlightStyle, syntaxHighlighting, LanguageDescription } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { tags as t } from "@lezer/highlight";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
@@ -16,10 +19,10 @@ const fishTheme = EditorView.theme(
     ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.65" },
     ".cm-gutters": { backgroundColor: "transparent", color: "var(--text-4)", border: "none", paddingLeft: "8px" },
     ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--text-2)" },
-    ".cm-activeLine": { backgroundColor: "rgba(148,163,184,0.05)" },
+    ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.035)" },
     ".cm-cursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
-    ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "rgba(45,212,191,0.22) !important" },
-    ".cm-matchingBracket": { backgroundColor: "rgba(129,140,248,0.25)", outline: "none" },
+    ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "rgba(255,255,255,0.14) !important" },
+    ".cm-matchingBracket": { backgroundColor: "rgba(255,255,255,0.12)", outline: "none" },
     ".cm-foldPlaceholder": { background: "var(--surface-3)", border: "none", color: "var(--text-2)" },
     ".cm-tooltip": { background: "var(--glass-strong)", border: "1px solid var(--border-2)", borderRadius: "8px" },
     ".cm-panels": { background: "var(--surface)", color: "var(--text)" },
@@ -56,26 +59,75 @@ export function languageFor(file = "") {
   return [];
 }
 
-export default function CodeEditor({ value, onChange, file, readOnly, height = "100%", onSave }) {
-  const saveKey = EditorView.domEventHandlers({
-    keydown(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        onSave?.();
-        return true;
-      }
-      return false;
-    },
-  });
+/** Human name of the language for the status bar. */
+export function languageName(file = "") {
+  const desc = LanguageDescription.matchFilename(languages, file.split(/[\\/]/).pop() || "");
+  return desc?.name || "Plain Text";
+}
+
+export default function CodeEditor({ value, onChange, file, readOnly, height = "100%", onSave, onCreate, onCursor, keys = [], wrap = true, goto, extra }) {
+  const [lang, setLang] = useState(() => languageFor(file));
+  const view = useRef(null);
+  const cb = useRef({});
+  cb.current = { onSave, onCursor, keys };
+
+  // Load a grammar for any language CodeMirror knows (Rust, Go, Java, C++, SQL, YAML…).
+  useEffect(() => {
+    let alive = true;
+    const quick = languageFor(file);
+    setLang(quick);
+    const desc = LanguageDescription.matchFilename(languages, (file || "").split(/[\\/]/).pop() || "");
+    if (desc && !quick.length) desc.load().then((support) => alive && setLang([support])).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [file]);
+
+  useEffect(() => {
+    const v = view.current;
+    if (!v || !goto?.line) return;
+    const line = v.state.doc.line(Math.min(Math.max(1, goto.line), v.state.doc.lines));
+    const pos = Math.min(line.from + Math.max(0, (goto.col || 1) - 1), line.to);
+    v.dispatch({ selection: { anchor: pos, head: pos + (goto.len || 0) }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+    v.focus();
+  }, [goto]);
+
+  const extensions = useMemo(
+    () => [
+      ...lang,
+      syntaxHighlighting(fishHighlight),
+      ...(wrap ? [EditorView.lineWrapping] : []),
+      ...(extra || []),
+      Prec.highest(
+        keymap.of([
+          { key: "Mod-s", preventDefault: true, run: () => (cb.current.onSave?.(), true) },
+          ...cb.current.keys.map((k) => ({ key: k.key, preventDefault: true, run: (v) => (cb.current.keys.find((x) => x.key === k.key)?.run(v), true) })),
+        ]),
+      ),
+      EditorView.updateListener.of((u) => {
+        if (!cb.current.onCursor || !(u.selectionSet || u.docChanged)) return;
+        const sel = u.state.selection.main;
+        const line = u.state.doc.lineAt(sel.head);
+        cb.current.onCursor({ line: line.number, col: sel.head - line.from + 1, selected: sel.to - sel.from, lines: u.state.doc.lines });
+      }),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lang, wrap, extra, keys.map((k) => k.key).join(",")],
+  );
+
   return (
     <CodeMirror
       value={value}
       height={height}
       theme={fishTheme}
       readOnly={readOnly}
-      extensions={[...languageFor(file), syntaxHighlighting(fishHighlight), EditorView.lineWrapping, saveKey]}
+      extensions={extensions}
       onChange={onChange}
-      basicSetup={{ highlightActiveLine: true, foldGutter: true, autocompletion: true, bracketMatching: true }}
+      onCreateEditor={(v) => {
+        view.current = v;
+        onCreate?.(v);
+      }}
+      basicSetup={{ highlightActiveLine: true, foldGutter: true, autocompletion: true, bracketMatching: true, highlightSelectionMatches: true }}
     />
   );
 }

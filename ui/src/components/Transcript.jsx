@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  FileText, FilePlus2, FilePen, TerminalSquare, Search, FolderTree, Globe, ListTodo, Sparkles, Plug, ChevronRight, Check, X, Brain,
+  Bot, Archive, ScrollText, RotateCcw, FileCode2, FileText, FilePlus2, FilePen, TerminalSquare, Search, FolderTree, Globe, ListTodo, Sparkles, Plug, ChevronRight, Check, X, Brain,
   AlertTriangle, Info, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 import Markdown from "./Markdown.jsx";
@@ -42,7 +42,7 @@ function prettyName(name) {
 }
 
 /** Groups history into user turns and assistant turns. */
-function buildTurns(messages) {
+function buildTurns(messages, offset = 0) {
   const results = new Map();
   for (const m of messages) {
     if (m.role === "user" && Array.isArray(m.content)) {
@@ -51,11 +51,12 @@ function buildTurns(messages) {
   }
   const turns = [];
   let current = null;
-  for (const m of messages) {
+  messages.forEach((m, i) => {
     if (m.role === "user") {
       const text = typeof m.content === "string" ? m.content : m.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      if (text) {
-        turns.push({ type: "user", text });
+      const files = typeof m.content === "string" ? [] : m.content.filter((b) => b.type === "image" || b.type === "document");
+      if (text || files.length) {
+        turns.push({ type: "user", text, files, index: offset + i });
         current = null;
       }
     } else if (m.role === "assistant") {
@@ -65,15 +66,19 @@ function buildTurns(messages) {
       }
       for (const b of Array.isArray(m.content) ? m.content : [{ type: "text", text: m.content }]) current.blocks.push(b);
     }
-  }
+  });
   return { turns, results };
 }
 
-export default function Transcript({ entry, compact }) {
+export default function Transcript({ entry, compact, onRewind }) {
   const scroller = useRef(null);
   const stick = useRef(true);
-  const { session, live, running, tools, approvals, notices } = entry;
-  const { turns, results } = useMemo(() => buildTurns(session.messages), [session.messages]);
+  const { session, live, running, tools, approvals, notices, subs } = entry;
+  const skip = session.summaryLength || 0;
+  const { turns, results } = useMemo(() => buildTurns(session.messages.slice(skip), skip), [session.messages, skip]);
+  const archived = useMemo(() => (session.archive?.length ? buildTurns(session.archive) : null), [session.archive]);
+  const [showArchive, setShowArchive] = useState(false);
+  const shared = { results, tools, approvals, sessionId: session.id, changes: session.changes, subs, saved: session.subagents };
 
   const lastIsAssistant = turns.at(-1)?.type === "assistant";
   if (running && !lastIsAssistant) turns.push({ type: "assistant", blocks: [], pendingOnly: true });
@@ -82,6 +87,33 @@ export default function Transcript({ entry, compact }) {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
+
+  const renderTurn = (t, i, list, { archive = false, sh = shared } = {}) =>
+    t.type === "user" ? (
+      <div key={i} className="msg-user">
+        {t.files?.length > 0 && <UserFiles files={t.files} />}
+        {t.text && <div className="bubble">{t.text}</div>}
+        {!archive && !running && onRewind && (
+          <button className="rewind-btn" title="Rewind to before this message" onClick={() => onRewind(t.index, t.text)}>
+            <RotateCcw size={12} /> Rewind
+          </button>
+        )}
+      </div>
+    ) : (
+      <div key={i} className="msg-assistant">
+        <div className="gutter">
+          <div className={`fish-avatar ${!archive && running && i === list.length - 1 ? "busy" : ""}`}>
+            <FishLogo size={18} id={`av${archive ? "a" : ""}${i}`} />
+          </div>
+        </div>
+        <div className="content">
+          {t.blocks.map((b, k) => (
+            <Block key={k} block={b} {...sh} />
+          ))}
+          {!archive && running && i === list.length - 1 && <LiveBlocks live={live} tools={tools} approvals={approvals} sessionId={session.id} subs={subs} />}
+        </div>
+      </div>
+    );
 
   return (
     <div
@@ -93,27 +125,25 @@ export default function Transcript({ entry, compact }) {
       }}
     >
       <div className="transcript-inner">
-        {turns.map((t, i) =>
-          t.type === "user" ? (
-            <div key={i} className="msg-user">
-              <div className="bubble">{t.text}</div>
+        {archived && (
+          <>
+            {showArchive && <div className="archived">{archived.turns.map((t, i, l) => renderTurn(t, i, l, { archive: true, sh: { ...shared, results: archived.results } }))}</div>}
+            <div className="compact-divider">
+              <span />
+              <button onClick={() => setShowArchive((v) => !v)}>
+                <Archive size={13} /> {session.compactions > 1 ? `Compacted ${session.compactions}×` : "Earlier turns summarized"} — {showArchive ? "hide" : "show"} history
+              </button>
+              <span />
             </div>
-          ) : (
-            <div key={i} className="msg-assistant">
-              <div className="gutter">
-                <div className={`fish-avatar ${running && i === turns.length - 1 ? "busy" : ""}`}>
-                  <FishLogo size={18} id={`av${i}`} />
-                </div>
-              </div>
-              <div className="content">
-                {t.blocks.map((b, k) => (
-                  <Block key={k} block={b} results={results} tools={tools} approvals={approvals} sessionId={session.id} changes={session.changes} />
-                ))}
-                {running && i === turns.length - 1 && <LiveBlocks live={live} tools={tools} approvals={approvals} sessionId={session.id} />}
-              </div>
-            </div>
-          ),
+            {session.summary && (
+              <details className="summary-card">
+                <summary><ScrollText size={13} /> Summary the agent continues from</summary>
+                <Markdown text={session.summary} />
+              </details>
+            )}
+          </>
         )}
+        {turns.map((t, i, l) => renderTurn(t, i, l))}
         {notices.map((n, i) => (
           <div key={`n${i}`} className={`notice ${n.kind}`}>
             {n.kind === "error" ? <AlertTriangle size={16} /> : <Info size={16} />}
@@ -125,7 +155,7 @@ export default function Transcript({ entry, compact }) {
   );
 }
 
-function LiveBlocks({ live, tools, approvals, sessionId }) {
+function LiveBlocks({ live, tools, approvals, sessionId, subs }) {
   const blocks = live.filter(Boolean);
   if (!blocks.length) {
     return (
@@ -146,13 +176,24 @@ function LiveBlocks({ live, tools, approvals, sessionId }) {
         const m = /"(file_path|command|pattern|url|path|query)"\s*:\s*"([^"]*)/.exec(b.partial || "");
         if (m) input = { [m[1]]: m[2] };
       }
+      if (b.name === "Task") return <TaskCard key={i} use={{ ...b, input }} live={subs?.[b.id]} composing />;
       return <ToolCard key={i} use={{ ...b, input }} tools={tools} approvals={approvals} sessionId={sessionId} composing />;
     }
     return null;
   });
 }
 
-function Block({ block, results, tools, approvals, sessionId, changes }) {
+function Block({ block, results, tools, approvals, sessionId, changes, subs, saved }) {
+  if (block.type === "compaction") {
+    return (
+      <div className="compact-divider inline">
+        <span /><em><Archive size={12} /> Context compacted by the API — older turns were summarized</em><span />
+      </div>
+    );
+  }
+  if (block.type === "tool_use" && block.name === "Task") {
+    return <TaskCard use={block} result={results.get(block.id)} live={subs?.[block.id]} saved={saved?.[block.id]} />;
+  }
   if (block.type === "text") return block.text ? <Markdown text={block.text} /> : null;
   if (block.type === "thinking") return block.thinking ? <Thinking text={block.thinking} /> : null;
   if (block.type === "redacted_thinking") return null;
@@ -295,6 +336,80 @@ export function TodoList({ todos, plain }) {
           <span className="txt">{t.content}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function UserFiles({ files }) {
+  const [open, setOpen] = useState(null);
+  return (
+    <div className="user-files">
+      {files.map((f, i) => {
+        if (f.type === "image") {
+          const src = `data:${f.source.media_type};base64,${f.source.data}`;
+          return <img key={i} className="user-img" src={src} alt="" onClick={() => setOpen(src)} />;
+        }
+        const pdf = f.source?.media_type === "application/pdf";
+        return (
+          <div key={i} className="attach-chip" title={f.title}>
+            {pdf ? <FileText size={15} /> : <FileCode2 size={15} />}
+            <span className="ellipsis">{f.title || "document"}</span>
+            <span className="sub">{pdf ? "PDF" : `${(f.source?.data || "").split("\n").length} lines`}</span>
+          </div>
+        );
+      })}
+      {open && (
+        <div className="overlay" onClick={() => setOpen(null)}>
+          <img src={open} alt="" className="lightbox" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A subagent run: its brief, live/persisted tool calls, and the final report. */
+function TaskCard({ use, result, live, saved, composing }) {
+  const [open, setOpen] = useState(false);
+  const calls = live?.calls || saved?.calls || [];
+  const running = !result && (live?.status === "running" || composing);
+  const isError = result?.is_error;
+  const report = typeof result?.content === "string" ? result.content : "";
+  const last = calls.at(-1);
+  return (
+    <div className={`tool task-card ${running ? "running" : ""}`}>
+      <button className="tool-head" onClick={() => setOpen((o) => !o)}>
+        <span className="tool-icon agent"><Bot size={14} /></span>
+        <span className="tool-name">Subagent</span>
+        <span className="tool-arg" title={use.input?.prompt}>{use.input?.description || "…"}</span>
+        <span className="tool-status">
+          {running ? (
+            <><span className="spin" /> {last ? `${last.name}` : "starting"}</>
+          ) : isError ? (
+            <span style={{ color: "var(--bad)" }}>failed</span>
+          ) : result ? (
+            <>{calls.length} tool calls <Check size={13} style={{ color: "var(--good)" }} /></>
+          ) : null}
+        </span>
+        <ChevronRight size={14} style={{ color: "var(--text-4)", transform: open ? "rotate(90deg)" : "", transition: "transform .15s" }} />
+      </button>
+      {(running || open) && calls.length > 0 && (
+        <div className="task-calls">
+          {calls.slice(open ? 0 : -4).map((c, i) => {
+            const Icon = metaFor(c.name).icon;
+            return (
+              <div key={i} className={`task-call ${c.isError ? "err" : ""}`}>
+                <Icon size={12} /> <b>{c.name}</b> <span className="ellipsis">{toolArg(c.name, c.input)}</span>
+                {c.done === false && <span className="spin" style={{ marginLeft: "auto", width: 10, height: 10 }} />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {open && report && (
+        <div className="tool-body" style={{ padding: "10px 14px" }}>
+          <Markdown text={report} />
+        </div>
+      )}
     </div>
   );
 }

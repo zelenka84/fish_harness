@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   MessagesSquare, Code2, Sparkles, Plug, ScrollText, BarChart3, Users, Settings as SettingsIcon, Search, Plus, Sun, Moon,
-  PanelLeftClose, PanelLeft, Pin, Trash2, Lock,
+  PanelLeftClose, PanelLeft, Pin, Trash2, Lock, TerminalSquare,
 } from "lucide-react";
 import { api, store, fmt, basename } from "./api.js";
 import { FishLogo, useToast, Avatar } from "./components/ui.jsx";
@@ -14,7 +14,9 @@ import PromptPage from "./pages/PromptPage.jsx";
 import StatsPage from "./pages/StatsPage.jsx";
 import AccountsPage from "./pages/AccountsPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import DevPage from "./pages/DevPage.jsx";
 import CommandPalette from "./components/CommandPalette.jsx";
+import { providerReady } from "./models.js";
 import Onboarding from "./components/Onboarding.jsx";
 
 const Ctx = createContext(null);
@@ -135,6 +137,7 @@ export default function App() {
   // Global shortcuts
   useEffect(() => {
     const onKey = (e) => {
+      if (e.defaultPrevented) return; // the editor or an IDE panel already handled it
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -180,7 +183,7 @@ export default function App() {
 
   const isElectron = navigator.userAgent.includes("Electron");
   const theme = state.config.theme;
-  const hasKey = state.config.providers.some((p) => p.hasKey || (p.type === "openai" && p.baseURL));
+  const hasKey = state.config.providers.some(providerReady);
 
   return (
     <Ctx.Provider value={value}>
@@ -190,6 +193,7 @@ export default function App() {
           <div className="brand">
             <FishLogo size={20} id="tb" />
             Fish Harness <small>v{state.version}</small>
+            {state.config.devMode && <span className="badge dev-badge no-drag" onClick={() => setView("dev")}>DEV</span>}
           </div>
           <div className="center">
             <button className="search-trigger no-drag" onClick={() => setPaletteOpen(true)}>
@@ -197,7 +201,7 @@ export default function App() {
             </button>
           </div>
           <div className="right">
-            <button className="icon-btn" title="Toggle theme" onClick={() => updateConfig({ theme: theme === "dark" ? "light" : "dark" })}>
+            <button className="icon-btn" title="Toggle theme" onClick={(e) => switchTheme(e, theme === "dark" ? "light" : "dark", updateConfig)}>
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
@@ -212,6 +216,12 @@ export default function App() {
               </button>
             ))}
             <div className="spacer" />
+            {state.config.devMode && (
+              <button className={`rail-btn ${view === "dev" ? "active" : ""}`} onClick={() => setView("dev")} aria-label="Dev-Mode">
+                <TerminalSquare size={19} strokeWidth={1.8} />
+                <span className="tip">Dev-Mode</span>
+              </button>
+            )}
             <button className={`rail-btn ${view === "settings" ? "active" : ""}`} onClick={() => setView("settings")} aria-label="Settings">
               <SettingsIcon size={19} strokeWidth={1.8} />
               <span className="tip">Settings</span>
@@ -230,6 +240,7 @@ export default function App() {
 
           <main className="main">
             {!hasKey && (view === "chat" || view === "ide") && <Onboarding />}
+            <div key={view} className="view-anim">
             {view === "chat" && <ChatView sessionId={activeId} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => (store.set("fish.sidebar", o ? "0" : "1"), !o))} />}
             {view === "ide" && <IdeView sessionId={activeId} />}
             {view === "skills" && <SkillsPage />}
@@ -238,6 +249,8 @@ export default function App() {
             {view === "stats" && <StatsPage />}
             {view === "accounts" && <AccountsPage />}
             {view === "settings" && <SettingsPage />}
+            {view === "dev" && (state.config.devMode ? <DevPage /> : <SettingsPage />)}
+            </div>
           </main>
         </div>
       </div>
@@ -372,4 +385,23 @@ export function SidebarToggle({ open, onToggle }) {
       <PanelLeft size={17} />
     </button>
   );
+}
+
+/** Theme switch with a circular reveal from the button (View Transitions API when available). */
+function switchTheme(e, next, updateConfig) {
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  if (!document.startViewTransition || reduce) return updateConfig({ theme: next });
+  const x = e.clientX;
+  const y = e.clientY;
+  const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  const t = document.startViewTransition(() => {
+    document.documentElement.dataset.theme = next;
+  });
+  t.ready.then(() => {
+    document.documentElement.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+      { duration: 520, easing: "cubic-bezier(.2,.8,.2,1)", pseudoElement: "::view-transition-new(root)" },
+    );
+  });
+  updateConfig({ theme: next });
 }

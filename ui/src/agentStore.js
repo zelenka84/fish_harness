@@ -26,7 +26,7 @@ export function onFileChanged(fn) {
 }
 
 function blank(session) {
-  return { session, live: [], running: false, runId: null, tools: {}, approvals: {}, notices: [], controller: null, startedAt: 0 };
+  return { session, live: [], running: false, runId: null, tools: {}, approvals: {}, notices: [], subs: {}, controller: null, startedAt: 0 };
 }
 
 export function useAgent(id) {
@@ -124,7 +124,23 @@ function handleEvent(e, ev, onTitle) {
     }
     case "tool_start":
       e.tools = { ...e.tools, [ev.id]: { status: "running", output: "", started: Date.now() } };
+      if (ev.name === "Task") e.subs = { ...e.subs, [ev.id]: { calls: [], status: "running" } };
       break;
+    case "sub": {
+      const x = ev.event;
+      const cur = e.subs[ev.parent] || { calls: [], status: "running" };
+      let calls = cur.calls;
+      if (x.type === "tool_start") calls = [...calls, { id: x.id, name: x.name, input: x.input, done: false }];
+      else if (x.type === "tool_done") calls = calls.map((c) => (c.id === x.id ? { ...c, done: true, isError: x.isError } : c));
+      e.subs = { ...e.subs, [ev.parent]: { ...cur, calls } };
+      break;
+    }
+    case "compacted": {
+      // The server compacted before appending the new prompt; keep our optimistic copy of it.
+      const pending = e.session.messages.at(-1);
+      e.session = { ...ev.session, messages: [...ev.session.messages, pending] };
+      break;
+    }
     case "tool_output":
       if (ev.toolId && e.tools[ev.toolId]) {
         e.tools = { ...e.tools, [ev.toolId]: { ...e.tools[ev.toolId], output: (e.tools[ev.toolId].output + ev.text).slice(-20000) } };
@@ -132,6 +148,7 @@ function handleEvent(e, ev, onTitle) {
       break;
     case "tool_done":
       e.tools = { ...e.tools, [ev.id]: { ...(e.tools[ev.id] || {}), status: ev.isError ? "error" : "done", ms: ev.ms } };
+      if (e.subs[ev.id]) e.subs = { ...e.subs, [ev.id]: { ...e.subs[ev.id], status: "done" } };
       break;
     case "todos":
       e.session = { ...e.session, todos: ev.todos };
@@ -167,4 +184,43 @@ export async function stop(id) {
 export function forget(id) {
   sessions.delete(id);
   emit();
+}
+
+/* Text other panels push into the composer (e.g. "add selection to chat"). */
+const draftListeners = new Set();
+export function pushDraft(text) {
+  draftListeners.forEach((fn) => fn(text));
+}
+export function onDraft(fn) {
+  draftListeners.add(fn);
+  return () => draftListeners.delete(fn);
+}
+
+/** Summarize older turns of a session to free up context. */
+export async function compactSession(id) {
+  const session = await api(`/sessions/${id}/compact`, { method: "POST" });
+  const e = sessions.get(id);
+  if (e) {
+    e.session = session;
+    e.notices = [];
+    emit();
+  }
+  return session;
+}
+
+export function rewindPreview(id, index) {
+  return api(`/sessions/${id}/rewind?index=${index}`);
+}
+
+/** Undo everything from the prompt at `index` on (files, conversation, or both). */
+export async function rewindSession(id, index, mode) {
+  const r = await api(`/sessions/${id}/rewind`, { method: "POST", body: { index, mode } });
+  const e = sessions.get(id);
+  if (e) {
+    e.session = r.session;
+    e.notices = [];
+    e.subs = {};
+    emit();
+  }
+  return r;
 }

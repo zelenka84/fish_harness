@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Wallet, Coins, Activity, Database, Timer, Wrench, MessagesSquare, AlertTriangle, Table2 } from "lucide-react";
 import { useApp } from "../App.jsx";
 import { api, fmt } from "../api.js";
+import { modelLabel } from "../models.js";
 import { BarChart, LineChart, Legend, HourHeat } from "../components/Charts.jsx";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
@@ -26,7 +27,7 @@ export default function StatsPage() {
   const maxModelCost = Math.max(0.0001, ...models.map(([, m]) => m.cost));
   const tools = Object.entries(data.tools).sort((a, b) => b[1].calls - a[1].calls);
   const maxCalls = Math.max(1, ...tools.map(([, x]) => x.calls));
-  const label = (id) => state.models.find((m) => m.id === id)?.label || id;
+  const label = (id) => modelLabel(state, state.config, id);
   const empty = t.requests === 0;
 
   return (

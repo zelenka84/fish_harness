@@ -6,15 +6,14 @@ export function FishLogo({ size = 24, id = "fl" }) {
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
       <defs>
         <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#2dd4bf" />
-          <stop offset="0.55" stopColor="#60a5fa" />
-          <stop offset="1" stopColor="#818cf8" />
+          <stop offset="0" stopColor="#f5f5f5" />
+          <stop offset="1" stopColor="#a3a3a3" />
         </linearGradient>
       </defs>
       <path d="M16 32 C23 18 43 15 55 32 C43 49 23 46 16 32 Z" fill={`url(#${id})`} />
       <path d="M18 32 L6 21 Q10.5 32 6 43 Z" fill={`url(#${id})`} />
-      <circle cx="45" cy="29.5" r="2.7" fill="#05070d" />
-      <path d="M36 22.5 Q31 32 36 41.5" stroke="#05070d" strokeOpacity=".35" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+      <circle cx="45" cy="29.5" r="2.7" fill="#0f0f0f" />
+      <path d="M36 22.5 Q31 32 36 41.5" stroke="#0f0f0f" strokeOpacity=".35" strokeWidth="2.2" fill="none" strokeLinecap="round" />
       <path d="M26 27 Q30 24 34 26" stroke="#fff" strokeOpacity=".35" strokeWidth="1.6" fill="none" strokeLinecap="round" />
     </svg>
   );
@@ -87,9 +86,10 @@ export const useToast = () => useContext(ToastCtx);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
-  const push = useCallback((text, kind = "success") => {
+  // A toast pushed with the same `key` replaces the previous one instead of stacking.
+  const push = useCallback((text, kind = "success", key) => {
     const id = Math.random();
-    setToasts((t) => [...t, { id, text, kind }]);
+    setToasts((t) => [...t.filter((x) => !key || x.key !== key), { id, key, text, kind }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === "error" ? 6000 : 3200);
   }, []);
   return (
@@ -115,7 +115,7 @@ export function Avatar({ account, size = 30 }) {
     .slice(0, 2)
     .toUpperCase();
   return (
-    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: `linear-gradient(135deg, ${account?.color || "#2dd4bf"}, #818cf8)` }}>
+    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: account?.color || "#94a3b8" }}>
       {initials}
     </span>
   );

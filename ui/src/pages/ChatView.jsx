@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { PanelRight, ListTodo, GitCompareArrows, Gauge, Bug, Rocket, BookOpen, TestTube2, FileCode2, ChevronRight, FolderOpen } from "lucide-react";
+import { Archive, RotateCcw, AlertTriangle, PanelRight, ListTodo, GitCompareArrows, Gauge, Bug, Rocket, BookOpen, TestTube2, FileCode2, ChevronRight, FolderOpen } from "lucide-react";
 import { useApp, SidebarToggle } from "../App.jsx";
-import { useAgent, send, stop, patchLocalSession } from "../agentStore.js";
+import { useAgent, send, stop, patchLocalSession, compactSession, rewindPreview, rewindSession, pushDraft } from "../agentStore.js";
 import { api, fmt, basename, store } from "../api.js";
 import Transcript, { TodoList } from "../components/Transcript.jsx";
 import Composer from "../components/Composer.jsx";
 import Diff, { DiffStats } from "../components/Diff.jsx";
 import { FishLogo, Modal } from "../components/ui.jsx";
+import { modelLabel } from "../models.js";
 
 const SUGGESTIONS = [
   { icon: BookOpen, title: "Explain this codebase", text: "Give me a guided tour of this codebase: architecture, key modules and how data flows through it." },
@@ -62,6 +63,20 @@ export default function ChatView({ sessionId, compact, sidebarOpen, onToggleSide
   const { config, newSession, refreshSessions, updateConfig, account } = useApp();
   const entry = useAgent(sessionId);
   const [panel, setPanel] = useState(store.get("fish.panel", "1") === "1");
+  const [rewind, setRewind] = useState(null); // { index, text }
+  const [compacting, setCompacting] = useState(false);
+  const { toast } = useApp();
+  const compactNow = async () => {
+    setCompacting(true);
+    try {
+      await compactSession(sessionId);
+      toast("Earlier turns summarized");
+      refreshSessions();
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    setCompacting(false);
+  };
   const [draftModel, setDraftModel] = useState(config.model);
   const { pick, modal } = useWorkspacePicker();
 
@@ -72,6 +87,7 @@ export default function ChatView({ sessionId, compact, sidebarOpen, onToggleSide
   }, [entry?.running, sessionId]);
 
   const doSend = async (text, id = sessionId) => {
+    if (typeof text === "string" && text.trim() === "/compact" && id) return compactNow();
     send(id, text, { onTitle: refreshSessions, onDone: refreshSessions });
   };
 
@@ -158,7 +174,8 @@ export default function ChatView({ sessionId, compact, sidebarOpen, onToggleSide
             </>
           )}
         </div>
-        <Transcript entry={entry} compact={compact} />
+        <Transcript entry={entry} compact={compact} onRewind={(index, text) => setRewind({ index, text })} />
+        <ContextBanner session={session} onCompact={compactNow} busy={compacting || running} />
         <Composer
           onSend={(t) => doSend(t)}
           running={running}
@@ -170,7 +187,21 @@ export default function ChatView({ sessionId, compact, sidebarOpen, onToggleSide
           compact={compact}
         />
       </div>
-      {!compact && <SidePanel session={session} hidden={!panel} />}
+      {!compact && <SidePanel session={session} hidden={!panel} onCompact={compactNow} compacting={compacting} running={running} />}
+      {rewind && (
+        <RewindModal
+          session={session}
+          target={rewind}
+          onClose={() => setRewind(null)}
+          onDone={(r, mode) => {
+            setRewind(null);
+            refreshSessions();
+            const files = r.reverted.length;
+            toast(mode === "conversation" ? "Conversation rewound" : `Rewound — restored ${files} file${files === 1 ? "" : "s"}`);
+            if (mode !== "files" && rewind.text) setTimeout(() => pushDraft(rewind.text), 50);
+          }}
+        />
+      )}
       {modal}
     </div>
   );
@@ -197,7 +228,7 @@ function TitleEditor({ session, onSaved }) {
   );
 }
 
-function SidePanel({ session, hidden }) {
+function SidePanel({ session, hidden, onCompact, compacting, running }) {
   const { state } = useApp();
   const [tab, setTab] = useState("tasks");
   const todos = session.todos || [];
@@ -248,13 +279,20 @@ function SidePanel({ session, hidden }) {
               <div className="meter"><div style={{ width: `${Math.max(1, (ctx / ctxMax) * 100)}%` }} /></div>
             </div>
             <div>
-              <div className="kv"><span>Model</span><span>{model?.label || session.model}</span></div>
+              <div className="kv"><span>Model</span><span className="ellipsis" style={{ maxWidth: 200 }}>{modelLabel(state, state.config, session.model)}</span></div>
               <div className="kv"><span>Input tokens</span><span className="mono">{fmt.tokens(u.input)}</span></div>
               <div className="kv"><span>Cache reads</span><span className="mono">{fmt.tokens(u.cacheRead)}</span></div>
               <div className="kv"><span>Cache writes</span><span className="mono">{fmt.tokens(u.cacheWrite)}</span></div>
               <div className="kv"><span>Output tokens</span><span className="mono">{fmt.tokens(u.output)}</span></div>
               <div className="kv"><span>Session cost</span><span className="mono grad-text" style={{ fontWeight: 700 }}>{fmt.cost(u.cost)}</span></div>
               <div className="kv"><span>Created</span><span>{new Date(session.createdAt).toLocaleString()}</span></div>
+              {session.compactions > 0 && <div className="kv"><span>Compactions</span><span>{session.compactions}</span></div>}
+            </div>
+            <div className="col" style={{ gap: 6 }}>
+              <button className="btn sm" disabled={compacting || running || session.messages.length < 4} onClick={onCompact}>
+                <Archive size={14} /> {compacting ? "Summarizing…" : "Compact now"}
+              </button>
+              <span className="small muted">Summarizes older turns so long sessions stay fast and cheap. Also: type <code>/compact</code>.</span>
             </div>
           </div>
         )}
@@ -276,5 +314,71 @@ function ChangeItem({ change, root }) {
       </button>
       {open && <div style={{ borderTop: "1px solid var(--border)" }}><Diff before={change.before} after={change.after} /></div>}
     </div>
+  );
+}
+
+function ContextBanner({ session, onCompact, busy }) {
+  const { state, config } = useApp();
+  const model = state.models.find((m) => m.id === session.model);
+  const limit = config.autoCompactTokens || model?.ctx || 200000;
+  const used = session.lastContext || 0;
+  if (used < 20000 || used < limit * 0.8) return null;
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  return (
+    <div className="context-banner">
+      <AlertTriangle size={14} />
+      <span className="grow">Context is {pct}% of the {Math.round(limit / 1000)}k compaction threshold — older turns will be summarized soon.</span>
+      <button className="btn xs" disabled={busy} onClick={onCompact}><Archive size={12} /> Compact now</button>
+    </div>
+  );
+}
+
+function RewindModal({ session, target, onClose, onDone }) {
+  const { toast } = useApp();
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    rewindPreview(session.id, target.index).then(setPreview).catch((e) => toast(e.message, "error"));
+  }, [session.id, target.index]);
+  const go = async (mode) => {
+    setBusy(true);
+    try {
+      onDone(await rewindSession(session.id, target.index, mode), mode);
+    } catch (e) {
+      toast(e.message, "error");
+      setBusy(false);
+    }
+  };
+  const rel = (p) => (p.startsWith(session.workspace) ? p.slice(session.workspace.length + 1) : p);
+  return (
+    <Modal title="Rewind to this message" icon={<RotateCcw size={20} />} onClose={onClose}>
+      <div className="bubble-quote">{target.text?.slice(0, 280) || "(attachments)"}</div>
+      {!preview ? (
+        <div className="skeleton" style={{ height: 60 }} />
+      ) : (
+        <>
+          {preview.files.length ? (
+            <div className="col" style={{ gap: 6 }}>
+              <span className="small muted">These files will be restored to how they were before this message:</span>
+              <div className="card" style={{ padding: "6px 10px", maxHeight: 180, overflow: "auto" }}>
+                {preview.files.map((f) => <div key={f} className="mono small ellipsis" style={{ padding: "3px 0" }}>{rel(f)}</div>)}
+              </div>
+            </div>
+          ) : (
+            <span className="small muted">Fish didn't change any files after this message.</span>
+          )}
+          {preview.shell && (
+            <div className="notice info"><AlertTriangle size={15} /> Commands ran in {preview.shellLabel} after this point — their side effects (installs, deletions, git) can't be undone automatically.</div>
+          )}
+        </>
+      )}
+      <div className="col" style={{ gap: 8, marginTop: 4 }}>
+        <button className="btn primary block" disabled={busy || !preview} onClick={() => go("both")}>Restore code and conversation</button>
+        <div className="row">
+          <button className="btn block grow" disabled={busy || !preview} onClick={() => go("conversation")}>Conversation only</button>
+          <button className="btn block grow" disabled={busy || !preview?.files.length} onClick={() => go("files")}>Code only</button>
+        </div>
+      </div>
+    </Modal>
   );
 }

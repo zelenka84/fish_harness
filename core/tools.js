@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import fg from "fast-glob";
 import { readSkill } from "./skills.js";
+import { quickReport } from "./diagnostics.js";
 
 const MAX_OUTPUT = 40_000;
 const IGNORE = ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.next/**", "**/__pycache__/**", "**/.venv/**"];
@@ -72,7 +73,7 @@ export const BUILTIN_TOOLS = [
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
       ctx.emit?.({ type: "file_changed", path: file, before, after: content });
-      return `${before === null ? "Created" : "Updated"} ${path.relative(ctx.cwd, file) || file} (${content.split("\n").length} lines)`;
+      return `${before === null ? "Created" : "Updated"} ${path.relative(ctx.cwd, file) || file} (${content.split("\n").length} lines)` + (await quickReport(ctx.cwd, file));
     },
   },
   {
@@ -98,7 +99,7 @@ export const BUILTIN_TOOLS = [
       const after = replace_all ? before.split(old_string).join(new_string) : before.replace(old_string, () => new_string);
       fs.writeFileSync(file, after);
       ctx.emit?.({ type: "file_changed", path: file, before, after });
-      return `Edited ${path.relative(ctx.cwd, file)} (${replace_all ? count : 1} replacement${count > 1 && replace_all ? "s" : ""})`;
+      return `Edited ${path.relative(ctx.cwd, file)} (${replace_all ? count : 1} replacement${count > 1 && replace_all ? "s" : ""})` + (await quickReport(ctx.cwd, file));
     },
   },
   {

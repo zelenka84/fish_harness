@@ -3,6 +3,7 @@ import { Plug, Plus, RefreshCw, Trash2, Download, ChevronRight, TerminalSquare, 
 import { useApp } from "../App.jsx";
 import { api } from "../api.js";
 import { Modal, Switch } from "../components/ui.jsx";
+import { ProvidersSection } from "../components/Providers.jsx";
 
 export default function McpPage() {
   const { config, updateConfig, toast, setView } = useApp();
@@ -38,8 +39,6 @@ export default function McpPage() {
   const toggle = (name, enabled) => saveServers(servers.map((s) => (s.name === name ? { ...s, enabled } : s)));
   const reconnect = async (name) => setStatus(await api(`/mcp/${encodeURIComponent(name)}/reconnect`, { method: "POST" }));
 
-  const anthropic = config.providers.find((p) => p.id === "anthropic");
-  const others = config.providers.filter((p) => p.type === "openai");
 
   return (
     <div className="page">
@@ -60,25 +59,7 @@ export default function McpPage() {
         </div>
 
         <div className="section-title" style={{ marginTop: 0 }}><KeyRound size={15} /> Model providers</div>
-        <div className="grid c2">
-          <div className="card pad row" style={{ gap: 14 }}>
-            <div className="skill-glyph"><Server size={17} /></div>
-            <div className="grow">
-              <div style={{ fontWeight: 640 }}>Anthropic API</div>
-              <div className="small muted">{anthropic?.hasKey ? (anthropic.apiKey ? `Key ${anthropic.apiKey}` : "Using ANTHROPIC_API_KEY from environment") : "No API key yet"}</div>
-            </div>
-            <span className={`dot ${anthropic?.hasKey ? "good" : "bad"}`} />
-            <button className="btn sm" onClick={() => setView("settings")}>Configure</button>
-          </div>
-          <div className="card pad row" style={{ gap: 14 }}>
-            <div className="skill-glyph"><Globe size={17} /></div>
-            <div className="grow">
-              <div style={{ fontWeight: 640 }}>OpenAI-compatible</div>
-              <div className="small muted">{others.length ? others.map((p) => p.name).join(", ") : "Ollama, LM Studio, OpenRouter, vLLM…"}</div>
-            </div>
-            <button className="btn sm" onClick={() => setView("settings")}>{others.length ? "Manage" : "Add"}</button>
-          </div>
-        </div>
+        <ProvidersSection />
 
         <div className="section-title"><Plug size={15} /> MCP servers</div>
         {servers.length === 0 ? (

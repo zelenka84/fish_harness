@@ -52,7 +52,9 @@ export function listSessions(account) {
     if (!f.endsWith(".json")) continue;
     const s = readJson(path.join(paths.sessions, f), null);
     if (!s || (account && s.account !== account)) continue;
-    const last = [...s.messages].reverse().find((m) => m.role === "user" && typeof m.content === "string");
+    const isPrompt = (m) => m.role === "user" && (typeof m.content === "string" || m.content.some((b) => b.type === "text" || b.type === "image" || b.type === "document"));
+    const textOf = (m) => (typeof m.content === "string" ? m.content : m.content.filter((b) => b.type === "text").map((b) => b.text).join(" "));
+    const last = [...s.messages].reverse().find(isPrompt);
     out.push({
       id: s.id,
       title: s.title,
@@ -61,8 +63,8 @@ export function listSessions(account) {
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       pinned: s.pinned,
-      turns: s.messages.filter((m) => m.role === "user" && typeof m.content === "string").length,
-      preview: last?.content?.slice(0, 140) || "",
+      turns: s.messages.filter(isPrompt).length,
+      preview: last ? textOf(last).slice(0, 140) : "",
       cost: s.usage?.cost || 0,
     });
   }
@@ -167,7 +169,7 @@ function aggregate(events, days) {
 
 /* ---------------------------------- accounts --------------------------------- */
 
-const COLORS = ["#2dd4bf", "#818cf8", "#f472b6", "#fbbf24", "#60a5fa", "#a3e635", "#fb7185"];
+const COLORS = ["#7fb5ab", "#9aa3d4", "#c99aae", "#c9a96e", "#8aaed6", "#a5b98a", "#c98f8f"];
 
 function loadAccounts() {
   const data = readJson(paths.accounts, null);

@@ -4,21 +4,25 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { Harness } from "../core/agent.js";
+import { Harness, TASK_TOOL } from "../core/agent.js";
 import { loadConfig, publicConfig, applyPublicPatch, PROMPT_PRESETS, saveConfig } from "../core/config.js";
-import { MODELS, EFFORTS } from "../core/models.js";
+import { MODELS, EFFORTS, PROVIDER_PRESETS } from "../core/models.js";
+import { listProviderModels, describeApiError } from "../core/providers.js";
 import { listSkills, readSkill, saveSkill, deleteSkill, seedSkills } from "../core/skills.js";
 import { discoverExternalMcp } from "../core/mcp.js";
 import { isInside, BUILTIN_TOOLS } from "../core/tools.js";
 import * as store from "../core/store.js";
 import { FISH_HOME } from "../core/paths.js";
+import { applyProxy, describeProxy } from "../core/net.js";
+import { DEFAULT_TEMPLATE, VARIABLES } from "../core/prompt.js";
+import { ideRoutes, attachTerminal } from "./ide.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIST = path.resolve(here, "..", "ui", "dist");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".ico": "image/x-icon" };
 
 export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
-  loadConfig();
+  applyProxy(loadConfig());
   seedSkills();
   const harness = new Harness();
   harness.init().catch(() => {});
@@ -49,16 +53,46 @@ export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
     models: MODELS,
     efforts: EFFORTS,
     presets: PROMPT_PRESETS,
+    providerPresets: PROVIDER_PRESETS,
+    network: describeProxy(loadConfig()),
     accounts: store.listAccounts(),
-    tools: BUILTIN_TOOLS.map((t) => ({ name: t.name, kind: t.kind, description: t.description })),
+    tools: [...BUILTIN_TOOLS, TASK_TOOL].map((t) => ({ name: t.name, kind: t.kind, description: t.description })),
     home: FISH_HOME,
     platform: process.platform,
     version: "1.0.0",
   }));
   route("PUT", "/api/config", async (req, body) => {
     const next = applyPublicPatch(body);
+    if ("proxy" in body) applyProxy(next);
     if (body.mcpServers) await harness.mcp.sync(next.mcpServers);
     return publicConfig();
+  });
+  // Fetch a provider's model list. A masked key means "use the stored one".
+  route("POST", "/api/providers/models", async (req, body) => {
+    const stored = loadConfig().providers.find((p) => p.id === body.id);
+    const apiKey = body.apiKey && !body.apiKey.includes("…") ? body.apiKey : stored?.apiKey || "";
+    try {
+      return await listProviderModels({ ...stored, ...body, apiKey });
+    } catch (err) {
+      throw Object.assign(new Error(describeApiError(err)), { status: 400 });
+    }
+  });
+  /* --------------------------- Dev-Mode prompt editor --------------------------- */
+  route("GET", "/api/dev/prompt", (req, body, q) => {
+    const config = loadConfig();
+    const workspace = q.get("workspace") || config.workspace;
+    const vars = harness.promptVars(workspace);
+    return {
+      defaultTemplate: DEFAULT_TEMPLATE,
+      template: config.promptTemplate || { enabled: false, text: "" },
+      variables: VARIABLES.map((v) => ({ ...v, value: vars[v.name] ?? "" })),
+      presets: PROMPT_PRESETS.map((p) => ({ ...p, override: config.presetOverrides?.[p.id] || "" })),
+      rendered: harness.buildSystemPrompt(workspace),
+    };
+  });
+  route("POST", "/api/dev/prompt/preview", (req, body) => {
+    const workspace = body.workspace || loadConfig().workspace;
+    return { text: harness.buildSystemPrompt(workspace, body.template ?? undefined) };
   });
   route("GET", "/api/system-prompt", (req, body, q) => ({ text: harness.buildSystemPrompt(q.get("workspace") || loadConfig().workspace) }));
 
@@ -146,6 +180,30 @@ export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
     resolve(body.decision);
     return { ok: true };
   });
+  const idle = (id) => {
+    if ([...runs.values()].some((r) => r.sessionId === id)) throw Object.assign(new Error("Stop the running turn first"), { status: 409 });
+  };
+  route("POST", "/api/sessions/:id/compact", async (req, body, q, p) => {
+    const session = ownSession(req, p.id);
+    idle(session.id);
+    try {
+      await harness.compact(session);
+    } catch (err) {
+      throw Object.assign(new Error(err.message), { status: 400 });
+    }
+    return session;
+  });
+  route("GET", "/api/sessions/:id/rewind", (req, body, q, p) => harness.rewindPreview(ownSession(req, p.id), Number(q.get("index"))));
+  route("POST", "/api/sessions/:id/rewind", (req, body, q, p) => {
+    const session = ownSession(req, p.id);
+    idle(session.id);
+    try {
+      const result = harness.rewind(session, Number(body.index), body.mode || "both");
+      return { ...result, session };
+    } catch (err) {
+      throw Object.assign(new Error(err.message), { status: 400 });
+    }
+  });
   route("POST", "/api/runs/:id/abort", (req, body, q, p) => {
     runs.get(p.id)?.controller.abort();
     return { ok: true };
@@ -225,11 +283,13 @@ export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
     });
   });
 
+  ideRoutes(route);
+
   /* --------------------------------- server ---------------------------------- */
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const origin = req.headers.origin;
-    if (origin && !/^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?|file:\/\/|null)$/.test(origin)) {
+    if (!originOk(origin)) {
       res.writeHead(403).end("Forbidden origin");
       return;
     }
@@ -258,6 +318,8 @@ export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
     serveStatic(url.pathname, res);
   });
 
+  await attachTerminal(server, originOk);
+
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
@@ -271,6 +333,11 @@ export async function startServer({ port = 4317, host = "127.0.0.1" } = {}) {
       server.close();
     },
   };
+}
+
+// Only the app itself (served from localhost) may call the API.
+function originOk(origin) {
+  return !origin || /^(https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?|file:\/\/|null)$/.test(origin);
 }
 
 function json(res, status, data) {
@@ -296,7 +363,7 @@ function readBody(req) {
 function serveStatic(pathname, res) {
   if (!fs.existsSync(UI_DIST)) {
     res.writeHead(200, { "content-type": "text/html" });
-    res.end(`<body style="background:#05070d;color:#cbd5e1;font-family:system-ui;padding:40px"><h2>Fish Harness server is running</h2><p>UI is not built yet. Run <code>npm run build</code>, or <code>npm run dev</code> for development.</p></body>`);
+    res.end(`<body style="background:#0f0f0f;color:#d4d4d4;font-family:system-ui;padding:40px"><h2>Fish Harness server is running</h2><p>UI is not built yet. Run <code>npm run build</code>, or <code>npm run dev</code> for development.</p></body>`);
     return;
   }
   let file = path.join(UI_DIST, decodeURIComponent(pathname));
