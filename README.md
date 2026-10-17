@@ -122,3 +122,9 @@ scripts/   helper scripts (icon generation)
 ```
 
 Stack: Node.js, `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, React 19, CodeMirror 6, xterm.js, node-pty, Electron.
+
+---
+
+## License
+
+[Apache License 2.0](LICENSE)

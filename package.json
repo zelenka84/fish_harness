@@ -1,7 +1,7 @@
 {
   "name": "fish-harness",
   "version": "1.0.0",
-  "description": "Fish Harness — premium AI coding harness: desktop app, IDE mode and terminal CLI.",
+  "description": "Local AI coding agent: desktop app, Cursor-style IDE and CLI — for Claude, OpenAI, OpenRouter and local models.",
   "type": "module",
   "main": "desktop/main.cjs",
   "bin": {
@@ -85,5 +85,10 @@
     "remark-gfm": "^4.0.1",
     "vite": "^8.3.4"
   },
-  "author": "Fish Harness"
+  "author": "Fish Harness",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zelenka84/fish_harness.git"
+  }
 }
