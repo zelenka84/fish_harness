@@ -804,3 +804,22 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .bubble-quote { padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; color: var(--text-2); white-space: pre-wrap; max-height: 120px; overflow: auto; }
 .context-banner { display: flex; align-items: center; gap: 10px; max-width: 820px; width: calc(100% - 56px); margin: 0 auto 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(229, 180, 90, 0.35); background: rgba(229, 180, 90, 0.07); color: var(--text-2); font-size: 12.5px; animation: rise 0.3s var(--ease) both; }
 .context-banner svg { color: var(--warn); flex: none; }
+
+/* Markdown preview + image tabs */
+.editor-area { display: flex; }
+.editor-area > .code-pane { flex: 1; min-width: 0; height: 100%; }
+.editor-area > .code-pane > div { height: 100%; }
+.editor-area.mdv-preview > .code-pane { display: none; }
+.md-preview { flex: 1; min-width: 0; height: 100%; overflow: auto; background: var(--bg); animation: fade 0.2s ease both; }
+.editor-area.mdv-split > .md-preview { border-left: 1px solid var(--border); }
+.md-doc { max-width: 860px; margin: 0 auto; padding: 28px 36px 60px; font-size: 14.5px; }
+.md-doc h1 { font-size: 28px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.md-doc h2 { font-size: 21px; padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-top: 28px; }
+.md-doc img { max-width: 100%; border-radius: 6px; }
+.md-doc table { display: table; }
+.seg.mini { padding: 2px; }
+.seg.mini button { height: 20px; padding: 0 8px; font-size: 11.5px; gap: 4px; }
+.image-tab { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; overflow: auto;
+  background-color: var(--bg); background-image: linear-gradient(45deg, var(--surface) 25%, transparent 25%), linear-gradient(-45deg, var(--surface) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, var(--surface) 75%), linear-gradient(-45deg, transparent 75%, var(--surface) 75%);
+  background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0; }
+.image-tab img { max-width: 100%; max-height: calc(100% - 40px); object-fit: contain; box-shadow: var(--shadow-lg); animation: pop-in 0.25s var(--ease) both; }

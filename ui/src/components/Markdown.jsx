@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -51,10 +51,30 @@ const components = {
   ),
 };
 
-export default memo(function Markdown({ text, streaming }) {
+/**
+ * resolveSrc: maps relative image paths (Markdown previews of workspace files).
+ * onLink: handles relative links (e.g. open another file in the IDE).
+ */
+export default memo(function Markdown({ text, streaming, resolveSrc, onLink, className = "" }) {
+  const comps = useMemo(() => {
+    if (!resolveSrc && !onLink) return components;
+    const external = (href = "") => /^([a-z]+:|#|\/\/)/i.test(href);
+    return {
+      ...components,
+      img: ({ src, alt }) => <img src={resolveSrc && !external(src) ? resolveSrc(src) : src} alt={alt || ""} loading="lazy" />,
+      a: ({ href, children }) =>
+        onLink && href && !external(href) ? (
+          <a href={href} onClick={(e) => (e.preventDefault(), onLink(href))}>{children}</a>
+        ) : href?.startsWith("#") ? (
+          <a href={href}>{children}</a>
+        ) : (
+          <a href={href} target="_blank" rel="noreferrer">{children}</a>
+        ),
+    };
+  }, [resolveSrc, onLink]);
   return (
-    <div className={`md ${streaming ? "cursor-blink" : ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]} components={components}>
+    <div className={`md ${streaming ? "cursor-blink" : ""} ${className}`}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]} components={comps}>
         {text}
       </ReactMarkdown>
     </div>

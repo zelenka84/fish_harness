@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  XCircle, AlertTriangle, Files, Search, GitBranch, Bot, TerminalSquare, X, Save, ChevronRight, ArrowUp, ArrowDown, Sparkles, CornerDownLeft, GitCompareArrows, Plus,
+  Code2, Columns2, Eye, XCircle, AlertTriangle, Files, Search, GitBranch, Bot, TerminalSquare, X, Save, ChevronRight, ArrowUp, ArrowDown, Sparkles, CornerDownLeft, GitCompareArrows, Plus,
 } from "lucide-react";
 import { useApp } from "../App.jsx";
 import { api, basename, store } from "../api.js";
@@ -19,8 +19,23 @@ import { fishLinter } from "../ide/diagnosticsLint.js";
 import { nextDiagnostic } from "@codemirror/lint";
 import ContextMenu from "../ide/ContextMenu.jsx";
 import { FileIcon } from "../ide/icons.jsx";
+import Markdown from "../components/Markdown.jsx";
 
 const q = (ws) => `workspace=${encodeURIComponent(ws)}`;
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif)$/i;
+const MD_RE = /\.(md|markdown|mdx)$/i;
+
+/** Resolve a link/image path written inside `fromFile` to a workspace-relative path. */
+function relPath(fromFile, href) {
+  const clean = decodeURIComponent(href.split("#")[0].split("?")[0]);
+  const parts = clean.startsWith("/") ? [] : fromFile.split("/").slice(0, -1);
+  for (const seg of clean.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join("/");
+}
 const keyOf = (t) => `${t.kind}:${t.path}`;
 const num = (k, d) => Number(store.get(k, d)) || d;
 
@@ -70,6 +85,8 @@ export default function IdeView({ sessionId }) {
   const [inline, setInline] = useState(null); // { path, from, to, text, value }
   const [tabMenu, setTabMenu] = useState(null);
   const [flash, setFlash] = useState("");
+  const [mdView, setMdView] = useState(store.get("ide.mdView", "split")); // code | split | preview
+  const setMd = (v) => (setMdView(v), store.set("ide.mdView", v));
   const [problems, setProblems] = useState({ errors: 0, warnings: 0, checkers: [] });
   const [completing, setCompleting] = useState("idle");
   useEffect(() => {
@@ -105,6 +122,12 @@ export default function IdeView({ sessionId }) {
 
   const openFile = useCallback(
     async (path, line, col, len) => {
+      if (IMAGE_RE.test(path)) {
+        if (!tabsRef.current.some((t) => t.kind === "image" && t.path === path)) setTabs((ts) => [...ts, { kind: "image", path, v: Date.now() }]);
+        setActive(`image:${path}`);
+        setRecent((r) => [path, ...r.filter((x) => x !== path)].slice(0, 20));
+        return;
+      }
       const goto = line ? { line, col, len, n: Date.now() } : undefined;
       const existing = tabsRef.current.find((t) => t.kind === "file" && t.path === path);
       if (existing) {
@@ -275,6 +298,13 @@ export default function IdeView({ sessionId }) {
         fn();
       };
       if (k === "p" && !e.shiftKey) handle(() => setQuickOpen(true));
+      else if (e.shiftKey && k === "v" && tabsRef.current.find((t) => `${t.kind}:${t.path}` === active && MD_RE.test(t.path))) {
+        handle(() => setMdView((v) => {
+          const next = v === "code" ? "split" : v === "split" ? "preview" : "code";
+          store.set("ide.mdView", next);
+          return next;
+        }));
+      }
       else if (e.shiftKey && k === "f") handle(() => (setSide("search"), persist("ide.side", "search"), setSearchKey((n) => n + 1)));
       else if (e.shiftKey && k === "e") handle(() => (setSide("explorer"), persist("ide.side", "explorer")));
       else if (e.shiftKey && k === "g") handle(() => (setSide("git"), persist("ide.side", "git"), refreshGit()));
@@ -395,9 +425,18 @@ export default function IdeView({ sessionId }) {
                   </span>
                 ))}
                 <span className="grow" />
-                <span className="crumb-hint"><kbd>Ctrl K</kbd> edit with AI · <kbd>Ctrl L</kbd> add to chat</span>
+                {MD_RE.test(current.path) ? (
+                  <div className="seg mini" title="Ctrl+Shift+V cycles views">
+                    <button className={mdView === "code" ? "on" : ""} onClick={() => setMd("code")}><Code2 size={12} /> Code</button>
+                    <button className={mdView === "split" ? "on" : ""} onClick={() => setMd("split")}><Columns2 size={12} /> Split</button>
+                    <button className={mdView === "preview" ? "on" : ""} onClick={() => setMd("preview")}><Eye size={12} /> Preview</button>
+                  </div>
+                ) : (
+                  <span className="crumb-hint"><kbd>Ctrl K</kbd> edit with AI · <kbd>Ctrl L</kbd> add to chat</span>
+                )}
               </div>
-              <div className="editor-area">
+              <div className={`editor-area ${MD_RE.test(current.path) ? `mdv-${mdView}` : ""}`}>
+                <div className="code-pane">
                 <CodeEditor
                   key={current.path}
                   file={current.path}
@@ -414,6 +453,17 @@ export default function IdeView({ sessionId }) {
                     { key: "Mod-l", run: addSelectionToChat },
                   ]}
                 />
+                </div>
+                {MD_RE.test(current.path) && mdView !== "code" && (
+                  <div className="md-preview">
+                    <Markdown
+                      className="md-doc"
+                      text={current.content}
+                      resolveSrc={(src) => `/api/fs/raw?${q(ws)}&path=${encodeURIComponent(relPath(current.path, src))}`}
+                      onLink={(href) => openFile(relPath(current.path, href))}
+                    />
+                  </div>
+                )}
                 {inline && (
                   <div className="inline-ask">
                     <Sparkles size={15} style={{ color: "var(--text-2)", flex: "none" }} />
@@ -433,6 +483,12 @@ export default function IdeView({ sessionId }) {
                 )}
               </div>
             </>
+          )}
+          {current?.kind === "image" && (
+            <div className="image-tab">
+              <img src={`/api/fs/raw?${q(ws)}&path=${encodeURIComponent(current.path)}&v=${current.v}`} alt={current.path} />
+              <span className="small muted">{current.path}</span>
+            </div>
           )}
           {current?.kind === "diff" && (
             <div className="diff-tab">

@@ -74,6 +74,22 @@ export function ideRoutes(route) {
     return { ok: true };
   });
 
+  // Raw bytes of a workspace file, for image tabs and images inside Markdown previews.
+  const RAW_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".svg": "image/svg+xml", ".ico": "image/x-icon", ".bmp": "image/bmp", ".avif": "image/avif",
+  };
+  route("GET", "/api/fs/raw", (req, body, q, p, res) => {
+    const { target } = resolveIn(q.get("workspace"), q.get("path"));
+    const type = RAW_TYPES[path.extname(target).toLowerCase()];
+    if (!type) throw err("Only images can be previewed", 415);
+    if (!fs.existsSync(target)) throw err("File not found", 404);
+    // SVG can carry scripts: serve it inert.
+    res.writeHead(200, { "content-type": type, "cache-control": "no-cache", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", "x-content-type-options": "nosniff" });
+    fs.createReadStream(target).pipe(res);
+    return undefined;
+  });
+
   /* ------------------------- quick open + search -------------------------- */
   route("GET", "/api/fs/index", async (req, body, q) => {
     const { root } = resolveIn(q.get("workspace"));
